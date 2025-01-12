@@ -8,7 +8,7 @@
 #include <ArduinoJson.h>
 
 // #define NODE_1
-// #define NODE_2
+#define NODE_2
 
 void messageHandler(String &topic, String &payload);
 
@@ -17,6 +17,9 @@ char topic_hum[] = "esp32/humidity";
 char topic_light[] = "esp32/light";
 char topic_pressure[] = "esp32/pressure";
 char topic_test[] = "esp32/test";
+
+char topic_fan[] = "esp32/fan";
+char topic_led[] = "esp32/led";
 
 #define PUBLISH_INTERVAL 4000
 
@@ -41,38 +44,55 @@ void sendToAWS(const char *topic, float value) {
 
   client.publish(topic, messageBuffer);
 
-  printMessage(topic, messageBuffer);
+//   printMessage(topic, messageBuffer);
 }
 
 void connectToAWS(char *topics[], int topicsCount) {
   // Configure WiFiClientSecure to use the AWS IoT device credentials
-  net.setCACert(AWS_CERT_CA);
-  net.setCertificate(AWS_CERT_CRT);
-  net.setPrivateKey(AWS_CERT_PRIVATE);
+	#ifdef NODE_1
+	net.setCACert(AWS_CERT_CA);
+	net.setCertificate(AWS_CERT_CRT);
+	net.setPrivateKey(AWS_CERT_PRIVATE);
+	#endif
 
-  // Connect to the MQTT broker on the AWS endpoint we defined earlier
-  client.begin(AWS_IOT_ENDPOINT, 8883, net);
+	#ifdef NODE_2
+	net.setCACert(AWS_CERT_CA2);
+	net.setCertificate(AWS_CERT_CRT2);
+	net.setPrivateKey(AWS_CERT_PRIVATE2);
+	#endif
 
-  // Create a handler for incoming messages
-  client.onMessage(messageHandler);
+	// Connect to the MQTT broker on the AWS endpoint we defined earlier
+	client.begin(AWS_IOT_ENDPOINT, 8883, net);
 
-  Serial.print("ESP32 connecting to AWS IOT");
+	// Create a handler for incoming messages
+	client.onMessage(messageHandler);
 
-  while (!client.connect(THINGNAME)) {
-    Serial.print(".");
-    delay(100);
-  }
-  Serial.println();
+	Serial.print("ESP32 connecting to AWS IOT");
 
-  if (!client.connected()) {
-    Serial.println("ESP32 - AWS IoT Timeout!");
-    return;
-  }
+	#ifdef NODE_1
+	while (!client.connect(THINGNAME)) {
+		Serial.print(".");
+		delay(100);
+	}
+	#endif
 
-  for (int i = 0; i < topicsCount; i++)
-	client.subscribe(topics[i]);
+	#ifdef NODE_2
+	while (!client.connect(THINGNAME2)) {
+		Serial.print(".");
+		delay(100);
+	}
+	#endif
+	Serial.println();
 
-  Serial.println("ESP32  - AWS IoT Connected!");
+	if (!client.connected()) {
+		Serial.println("ESP32 - AWS IoT Timeout!");
+		return;
+	}
+
+	for (int i = 0; i < topicsCount; i++)
+		client.subscribe(topics[i]);
+
+	Serial.println("ESP32  - AWS IoT Connected!");
 }
 
 #ifdef NODE_1
@@ -84,19 +104,51 @@ void connectToAWS(char *topics[], int topicsCount) {
 
 Adafruit_BME280 bme; // I2C
 
+#define LED_PIN 4
+
+bool ledState = false;
 unsigned long delayTime;
+unsigned int lightLevel = 150;
 
 void messageHandler(String &topic, String &payload) {
-  Serial.println("received:");
-  Serial.println("- topic: " + topic);
-  Serial.println("- payload:");
-  Serial.println(payload);
+	// Serial.println("received:");
+	// Serial.println("- topic: " + topic);
+	// Serial.println("- payload:");
+	// Serial.println(payload);
+
+	if (topic == topic_test || topic == topic_led) {
+		Serial.println("Received test message");
+		ledState = !ledState;
+	}
+
+	if (topic == topic_light) {
+		StaticJsonDocument<200> message;
+		deserializeJson(message, payload);
+		unsigned int currentLightLevel = message["message"];
+		Serial.print("Light level: ");
+		Serial.println(currentLightLevel);
+		
+		if (currentLightLevel < lightLevel) {
+			ledState = true;
+		} else {
+			ledState = false;
+		}
+	}
+  
+	if (ledState) {
+		digitalWrite(LED_PIN, HIGH);
+	} else {
+		digitalWrite(LED_PIN, LOW);
+	}
+
 }
 
 void setup() {
 	Serial.begin(9600);
 	Serial.println(F("BME280 test"));
 
+	pinMode(LED_PIN, OUTPUT);
+	
 	bool status;
 
 	status = bme.begin(0x76);  
@@ -121,9 +173,9 @@ void setup() {
 	}
 	Serial.println();
 
-	char *topicsub[] = {topic_light, topic_temp, topic_test};
+	char *topicsub[] = {topic_light, topic_temp, topic_led, topic_test};
 
-	connectToAWS(topicsub, 3);
+	connectToAWS(topicsub, 4);
 }
 
 
@@ -147,26 +199,69 @@ void loop() {
 #include <BH1750.h>
 
 #define RELAY_PIN 5
+#define HEAT_PIN 4
 
 BH1750 lightMeter;
 
 bool relayState = false;
+bool heatState = true;
+unsigned int humidityLevel = 40;
+unsigned int temperatureLevel = 20;
 
 void messageHandler(String &topic, String &payload) {
-	Serial.println("received:");
-	Serial.println("- topic: " + topic);
-	Serial.println("- payload:");
-	Serial.println(payload);
+	// Serial.println("received:");
+	// Serial.println("- topic: " + topic);
+	// Serial.println("- payload:");
+	// Serial.println(payload);
 
-	if (topic == topic_test) {
+	if (topic == topic_test || topic == topic_fan) {
 		Serial.println("Received test message");
 		relayState = !relayState;
+	}
 
-		if (relayState) {
-			digitalWrite(RELAY_PIN, HIGH);
+	if (topic == topic_test || topic == topic_led) {
+		Serial.println("Received heat message");
+		heatState = !heatState;
+	}
+
+	if (topic == topic_hum) {
+		StaticJsonDocument<200> message;
+		deserializeJson(message, payload);
+		unsigned int currentHumidityLevel = message["message"];
+		Serial.print("Humidity level: ");
+		Serial.println(currentHumidityLevel);
+		
+		if (currentHumidityLevel > humidityLevel) {
+			relayState = true;
 		} else {
-			digitalWrite(RELAY_PIN, LOW);
+			relayState = false;
 		}
+	}
+
+	if (topic == topic_temp) {
+		StaticJsonDocument<200> message;
+		deserializeJson(message, payload);
+		float currentTemperature = message["message"];
+		Serial.print("Temperature: ");
+		Serial.println(currentTemperature);
+		
+		if (currentTemperature < temperatureLevel) {
+			heatState = true;
+		} else {
+			heatState = false;
+		}
+	}
+
+	if (relayState) {
+		digitalWrite(RELAY_PIN, HIGH);
+	} else {
+		digitalWrite(RELAY_PIN, LOW);
+	}
+
+	if (heatState) {
+		digitalWrite(HEAT_PIN, HIGH);
+	} else {
+		digitalWrite(HEAT_PIN, LOW);
 	}
 }
 
@@ -182,7 +277,8 @@ void setup() {
 
 	Serial.println(F("BH1750 Test begin"));
 
-	pinMode(RELAY_PIN, OUTPUT);  
+	pinMode(RELAY_PIN, OUTPUT);
+	pinMode(HEAT_PIN, OUTPUT);
 
 	WiFi.mode(WIFI_STA);
 	WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -195,9 +291,9 @@ void setup() {
 	}
 	Serial.println();
 
-	char *topicsub[] = {topic_hum, topic_pressure, topic_test};
+	char *topicsub[] = {topic_hum, topic_pressure, topic_temp, topic_fan, topic_test};
 
-	connectToAWS(topicsub, 3);
+	connectToAWS(topicsub, 5);
 }
 
 void loop() {
